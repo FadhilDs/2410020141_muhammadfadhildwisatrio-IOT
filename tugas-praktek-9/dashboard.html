@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IoT Dashboard - REST API</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
+    body {
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      min-height: 100vh; padding: 20px; color: #333;
+    }
+    .container { max-width: 1000px; margin: 0 auto; }
+    h1 { color: white; text-align: center; margin-bottom: 25px; font-size: 28px; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin-bottom: 25px; }
+    .card {
+      background: white; border-radius: 15px; padding: 25px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+      text-align: center; transition: transform 0.2s;
+    }
+    .card:hover { transform: translateY(-5px); }
+    .card .label { font-size: 14px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+    .card .value { font-size: 42px; font-weight: bold; margin: 10px 0; color: #667eea; }
+    .card .unit { font-size: 18px; color: #aaa; }
+    .status-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; }
+    .status-online { background: #d4edda; color: #155724; }
+    .status-offline { background: #f8d7da; color: #721c24; }
+    .panel {
+      background: white; border-radius: 15px; padding: 25px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2); margin-bottom: 25px;
+    }
+    .panel h2 { font-size: 18px; margin-bottom: 15px; color: #444; }
+    .controls { display: flex; gap: 15px; flex-wrap: wrap; }
+    .btn {
+      padding: 12px 30px; border: none; border-radius: 10px;
+      font-size: 15px; font-weight: 600; cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-on { background: #28a745; color: white; }
+    .btn-on:hover { background: #218838; }
+    .btn-off { background: #dc3545; color: white; }
+    .btn-off:hover { background: #c82333; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px; text-align: left; border-bottom: 1px solid #eee; font-size: 14px; }
+    th { background: #f8f9fa; color: #666; text-transform: uppercase; font-size: 12px; }
+    tr:hover td { background: #f9f9f9; }
+    #log {
+      background: #1e1e1e; color: #0f0; font-family: monospace;
+      padding: 15px; border-radius: 10px; max-height: 180px;
+      overflow-y: auto; font-size: 13px; line-height: 1.6;
+    }
+    #log .error { color: #f66; }
+    #log .info { color: #6af; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>🌡️ IoT Dashboard — REST API</h1>
+  <div id="mode" style="text-align:center;color:white;margin:-15px 0 20px;font-size:14px;">Mode: menyambungkan...</div>
+
+  <!-- Banner peringatan suhu -->
+  <div id="alert-banner" style="display:none;background:#dc3545;color:white;padding:15px;border-radius:12px;margin-bottom:20px;text-align:center;font-weight:600;box-shadow:0 10px 30px rgba(0,0,0,0.2);"></div>
+
+  <!-- Kartu Sensor -->
+  <div class="cards">
+    <div class="card">
+      <div class="label">Suhu</div>
+      <div class="value" id="suhu">--</div>
+      <div class="unit">°C</div>
+    </div>
+    <div class="card">
+      <div class="label">Kelembaban</div>
+      <div class="value" id="kelembaban">--</div>
+      <div class="unit">%</div>
+    </div>
+    <div class="card">
+      <div class="label">Status Sensor</div>
+      <div class="value" style="font-size:22px;" id="status">
+        <span class="status-badge status-offline" id="status-badge">OFFLINE</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Threshold -->
+  <div class="panel">
+    <h2>🚨 Batas Suhu (Threshold)</h2>
+    <div class="controls">
+      <input type="number" id="thr-input" step="0.1" placeholder="mis. 30" style="padding:12px;border:1px solid #ccc;border-radius:10px;font-size:15px;width:140px;">
+      <button class="btn btn-on" onclick="setThreshold()">Set Batas</button>
+      <span id="thr-now" style="align-self:center;color:#666;">Batas saat ini: --</span>
+    </div>
+  </div>
+
+  <!-- Kontrol -->
+  <div class="panel">
+    <h2>💡 Kontrol Perangkat</h2>
+    <div class="controls">
+      <button class="btn btn-on" onclick="kontrol('lamp','on')">Nyalakan Lampu</button>
+      <button class="btn btn-off" onclick="kontrol('lamp','off')">Matikan Lampu</button>
+    </div>
+  </div>
+
+  <!-- Grafik Real-time -->
+  <div class="panel">
+    <h2>📈 Grafik Real-time</h2>
+    <div style="position:relative;height:300px;">
+      <canvas id="chart"></canvas>
+    </div>
+  </div>
+
+  <!-- History -->
+  <div class="panel">
+    <h2>📊 10 Data Sensor Terakhir</h2>
+    <table>
+      <thead>
+        <tr><th>Waktu</th><th>Suhu (°C)</th><th>Kelembaban (%)</th></tr>
+      </thead>
+      <tbody id="history-body">
+        <tr><td colspan="3" style="text-align:center;color:#999;">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Log -->
+  <div class="panel">
+    <h2>📝 Log Aktivitas</h2>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+// ==============================
+// KONFIGURASI
+// ==============================
+// Kalau dibuka dari Node-RED (http://localhost:1880/dashboard) pakai alamat relatif,
+// kalau dibuka sebagai file biasa pakai alamat lengkap.
+const API_BASE = location.protocol.startsWith('http') ? '/api' : 'http://localhost:1880/api';
+const API_KEY = 'rahasia123';   // harus sama dengan KEY di node "Cek API Key"
+const HEADERS = { 'X-API-Key': API_KEY };
+
+// ==============================
+// UTILITY: LOG
+// ==============================
+function log(msg, type = 'info') {
+  const el = document.getElementById('log');
+  const time = new Date().toLocaleTimeString();
+  el.innerHTML += `<div class="${type}">[${time}] ${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+// ==============================
+// GRAFIK (Chart.js)
+// ==============================
+const MAX_POINTS = 20;
+let lastReceived = null;
+
+const chart = new Chart(document.getElementById('chart'), {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'Suhu (°C)', data: [], borderColor: '#e74c3c', backgroundColor: 'rgba(231,76,60,0.1)', tension: 0.3, yAxisID: 'y' },
+      { label: 'Kelembaban (%)', data: [], borderColor: '#667eea', backgroundColor: 'rgba(102,126,234,0.1)', tension: 0.3, yAxisID: 'y1' }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    scales: {
+      y:  { position: 'left',  title: { display: true, text: 'Suhu (°C)' } },
+      y1: { position: 'right', title: { display: true, text: 'Kelembaban (%)' }, grid: { drawOnChartArea: false } }
+    }
+  }
+});
+
+function updateChart(d) {
+  // Hindari titik ganda kalau data belum berubah
+  if (d.received === lastReceived) return;
+  lastReceived = d.received;
+
+  chart.data.labels.push(new Date(d.received).toLocaleTimeString());
+  chart.data.datasets[0].data.push(d.suhu);
+  chart.data.datasets[1].data.push(d.kelembaban);
+
+  if (chart.data.labels.length > MAX_POINTS) {
+    chart.data.labels.shift();
+    chart.data.datasets.forEach(ds => ds.data.shift());
+  }
+  chart.update();
+}
+
+// ==============================
+// FETCH DATA SENSOR (GET)
+// ==============================
+// Tampilkan satu data sensor di kartu, grafik, dan banner
+function applySensor(d) {
+  document.getElementById('suhu').textContent = d.suhu;
+  document.getElementById('kelembaban').textContent = d.kelembaban;
+  updateChart(d);
+  checkAlert(d.suhu);
+  const badge = document.getElementById('status-badge');
+  badge.textContent = 'ONLINE';
+  badge.className = 'status-badge status-online';
+}
+
+// Ambil data lewat REST (dipakai saat awal dan sebagai cadangan polling)
+async function fetchSensor() {
+  try {
+    const res = await fetch(`${API_BASE}/suhu`, { headers: HEADERS });
+    const json = await res.json();
+
+    if (json.status === 'success' && json.data.suhu !== null) {
+      applySensor(json.data);
+    } else {
+      if (json.status === 'error') log(`✗ ${json.message}`, 'error');
+      const badge = document.getElementById('status-badge');
+      badge.textContent = 'OFFLINE';
+      badge.className = 'status-badge status-offline';
+    }
+  } catch (err) {
+    log(`Gagal fetch sensor: ${err.message}`, 'error');
+  }
+}
+
+// ==============================
+// WEBSOCKET (update tanpa polling)
+// ==============================
+let ws = null;
+let pollTimer = null;
+
+function setMode(text) {
+  document.getElementById('mode').textContent = 'Mode: ' + text;
+}
+function startPolling() {
+  if (!pollTimer) pollTimer = setInterval(fetchSensor, 3000);
+}
+function stopPolling() {
+  clearInterval(pollTimer);
+  pollTimer = null;
+}
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  const host = location.protocol.startsWith('http') ? location.host : 'localhost:1880';
+  ws = new WebSocket(`${proto}${host}/ws/sensor`);
+
+  ws.onopen = () => {
+    log('✓ WebSocket tersambung (real-time)', 'info');
+    setMode('WebSocket (real-time, tanpa polling)');
+    stopPolling();
+  };
+
+  // "Bel": fungsi ini jalan otomatis setiap Node-RED mengirim data baru
+  ws.onmessage = (event) => {
+    try {
+      applySensor(JSON.parse(event.data));
+    } catch (err) {
+      log(`Data WebSocket tidak valid: ${err.message}`, 'error');
+    }
+  };
+
+  ws.onclose = () => {
+    log('WebSocket terputus, pakai polling cadangan dan coba sambung lagi...', 'error');
+    setMode('Polling (cadangan)');
+    startPolling();
+    setTimeout(connectWS, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+// ==============================
+// FETCH HISTORY
+// ==============================
+async function fetchHistory() {
+  try {
+    const res = await fetch(`${API_BASE}/history`, { headers: HEADERS });
+    const json = await res.json();
+    const tbody = document.getElementById('history-body');
+
+    if (!json.data || json.data.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#999;">Belum ada data</td></tr>';
+      return;
+    }
+
+    // Ambil 10 terakhir, balik urutan (terbaru di atas)
+    const rows = json.data.slice(-10).reverse().map(d => `
+      <tr>
+        <td>${new Date(d.received).toLocaleTimeString()}</td>
+        <td>${d.suhu}</td>
+        <td>${d.kelembaban}</td>
+      </tr>
+    `).join('');
+    tbody.innerHTML = rows;
+  } catch (err) {
+    log(`Gagal fetch history: ${err.message}`, 'error');
+  }
+}
+
+// ==============================
+// KONTROL LAMPU (POST)
+// ==============================
+async function kontrol(device, action) {
+  try {
+    const res = await fetch(`${API_BASE}/kontrol`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+      body: JSON.stringify({ device, action })
+    });
+    const json = await res.json();
+    if (json.status === 'success') {
+      log(`✓ Perintah terkirim: ${device} → ${action}`, 'info');
+    } else {
+      log(`✗ Gagal: ${json.message}`, 'error');
+    }
+  } catch (err) {
+    log(`✗ Error kontrol: ${err.message}`, 'error');
+  }
+}
+
+// ==============================
+// THRESHOLD (PUT) + PERINGATAN
+// ==============================
+let currentThreshold = null;
+
+async function loadThreshold() {
+  try {
+    const res = await fetch(`${API_BASE}/threshold`, { headers: HEADERS });
+    const json = await res.json();
+    if (json.status === 'success') {
+      currentThreshold = json.threshold;
+      document.getElementById('thr-now').textContent = `Batas saat ini: ${currentThreshold} °C`;
+    }
+  } catch (err) {
+    log(`Gagal ambil threshold: ${err.message}`, 'error');
+  }
+}
+
+async function setThreshold() {
+  const v = parseFloat(document.getElementById('thr-input').value);
+  if (isNaN(v)) {
+    log('✗ Masukkan angka batas yang valid', 'error');
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/threshold`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+      body: JSON.stringify({ max: v })
+    });
+    const json = await res.json();
+    if (json.status === 'success') {
+      log(`✓ Batas suhu diubah: ${json.threshold} °C`, 'info');
+      loadThreshold();
+    } else {
+      log(`✗ Gagal: ${json.message}`, 'error');
+    }
+  } catch (err) {
+    log(`✗ Error set threshold: ${err.message}`, 'error');
+  }
+}
+
+function checkAlert(suhu) {
+  const banner = document.getElementById('alert-banner');
+  if (currentThreshold !== null && suhu > currentThreshold) {
+    banner.textContent = `⚠️ Suhu ${suhu}°C melewati batas ${currentThreshold}°C`;
+    banner.style.display = 'block';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+// ==============================
+// AUTO REFRESH
+// ==============================
+log('Dashboard dimulai, menyambungkan WebSocket...');
+loadThreshold();
+fetchSensor();      // data awal lewat REST
+fetchHistory();
+connectWS();        // selanjutnya data datang lewat WebSocket
+setInterval(fetchHistory, 5000);
+</script>
+</body>
+</html>
